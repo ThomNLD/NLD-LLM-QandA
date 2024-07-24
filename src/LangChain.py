@@ -15,49 +15,112 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 load_dotenv("../.env")
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
-# Specify the encoding when loading the CSV file
-loader = CSVLoader(
-    file_path="../docs/codebasics_faqs.csv",
-    source_column="prompt",
-    encoding="Windows-1252",
-)
 
-# Load the data from the CSV file
-data = loader.load()
+def create_vector_db(
+    csv_file_path, source_column, vector_store_path, encoding="Windows-1252"
+):
+    """
+    Create or load a FAISS vector store from a CSV file.
 
-# Initialize the HuggingFace embeddings model
-embeddings_model = HuggingFaceEmbeddings()
+    Args:
+        csv_file_path (str): Path to the CSV file.
+        source_column (str): Column name in the CSV to use as the source text.
+        vector_store_path (str): Path to save or load the vector store.
+        encoding (str): Encoding of the CSV file.
 
-# Create a FAISS vector store from the loaded documents
-vectordb = FAISS.from_documents(documents=data, embedding=embeddings_model)
+    Returns:
+        FAISS: The vector store object.
+    """
+    # Load the data from the CSV file
+    loader = CSVLoader(
+        file_path=csv_file_path, source_column=source_column, encoding=encoding
+    )
+    data = loader.load()
 
-# Initialize a retriever from the vector store
-retriever = vectordb.as_retriever(search_kwargs={"k": 4})
+    # Initialize the HuggingFace embeddings model
+    embeddings_model = HuggingFaceEmbeddings()
 
-# Retrieve documents based on a query
-docs = retriever.invoke("How about job placement support?")
+    # Check if the vector store already exists
+    if os.path.exists(vector_store_path):
+        # Load the existing vector store
+        vectordb = FAISS.load_local(
+            vector_store_path,
+            embeddings=embeddings_model,
+            allow_dangerous_deserialization=True,
+        )
+    else:
+        # Create a new vector store from the documents
+        vectordb = FAISS.from_documents(documents=data, embedding=embeddings_model)
+        # Save the vector store to disk
+        vectordb.save_local(vector_store_path)
 
-# Initialize the OpenAI LLM (ChatGPT model)
-llm = ChatOpenAI(model="gpt-4o-mini", api_key=openai_api_key)
-
-# Pull the prompt template from the LangChain hub
-prompt = hub.pull("rlm/rag-prompt")
+    return vectordb
 
 
-# Define a function to format the documents for the prompt
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
+def get_qa_chain(
+    vector_store_path,
+    openai_api_key,
+    prompt_name="rlm/rag-prompt",
+    search_kwargs={"k": 2},
+):
+    """
+    Get the RAG QA chain using the specified vector store and OpenAI LLM.
+
+    Args:
+        vector_store_path (str): Path to the vector store.
+        openai_api_key (str): OpenAI API key.
+        prompt_name (str): Name of the prompt to pull from LangChain hub.
+        search_kwargs (dict): Search arguments for the retriever.
+
+    Returns:
+        callable: The RAG chain callable.
+    """
+    # Initialize the HuggingFace embeddings model
+    embeddings_model = HuggingFaceEmbeddings()
+
+    # Load the vector store
+    vectordb = FAISS.load_local(
+        vector_store_path,
+        embeddings=embeddings_model,
+        allow_dangerous_deserialization=True,
+    )
+
+    # Initialize a retriever from the vector store
+    retriever = vectordb.as_retriever(search_kwargs=search_kwargs)
+
+    # Initialize the OpenAI LLM (ChatGPT model)
+    llm = ChatOpenAI(model="gpt-4o-mini", api_key=openai_api_key)
+
+    # Pull the prompt template from the LangChain hub
+    prompt = hub.pull(prompt_name)
+
+    # Define a function to format the documents for the prompt
+    def format_docs(docs):
+        return "\n\n".join(doc.page_content for doc in docs)
+
+    # Define the RAG chain
+    rag_chain = (
+        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+
+    return rag_chain
 
 
-# Define the RAG chain
-rag_chain = (
-    {"context": retriever | format_docs, "question": RunnablePassthrough()}
-    | prompt
-    | llm
-    | StrOutputParser()
-)
+# Paths and configurations
+csv_file_path = "../docs/codebasics_faqs.csv"
+source_column = "prompt"
+vector_store_path = "../docs/faiss_vector_store"
+
+# Create or load the vector store
+vectordb = create_vector_db(csv_file_path, source_column, vector_store_path)
+
+# Get the QA chain
+rag_chain = get_qa_chain(vector_store_path, openai_api_key)
 
 # Invoke the RAG chain with a question and stream the results
-question = "Is does course helpful for my resume, and why?"
+question = "Should I learn powerbi??"
 for chunk in rag_chain.stream(question):
     print(chunk, end="", flush=True)

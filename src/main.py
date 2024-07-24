@@ -1,4 +1,5 @@
 import os
+import streamlit as st
 from dotenv import load_dotenv
 from langchain_community.document_loaders.csv_loader import CSVLoader
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -12,12 +13,15 @@ from langchain_core.runnables import RunnablePassthrough
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Load environment variables
-load_dotenv("../.env")
+load_dotenv(".env")
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
 
 def create_vector_db(
-    csv_file_path, source_column, vector_store_path, encoding="Windows-1252"
+    csv_file_path="./src/codebasics_faqs.csv",
+    source_column="prompt",
+    vector_store_path="./docs/faiss_vector_store",
+    encoding="Windows-1252",
 ):
     """
     Create or load a FAISS vector store from a CSV file.
@@ -58,8 +62,8 @@ def create_vector_db(
 
 
 def get_qa_chain(
-    vector_store_path,
-    openai_api_key,
+    vector_store_path="./docs/faiss_vector_store",
+    openai_api_key=openai_api_key,
     prompt_name="rlm/rag-prompt",
     search_kwargs={"k": 2},
 ):
@@ -109,18 +113,21 @@ def get_qa_chain(
     return rag_chain
 
 
-# Paths and configurations
-csv_file_path = "../src/codebasics_faqs.csv"
-source_column = "prompt"
-vector_store_path = "../docs/faiss_vector_store"
+# Streamlit UI
+st.title("Codebasics Q&A 🌱")
 
-# Create or load the vector store
-vectordb = create_vector_db(csv_file_path, source_column, vector_store_path)
+# Button to create the knowledgebase
+if st.button("Create Knowledgebase"):
+    create_vector_db()
+    st.success("Knowledgebase created successfully!")
 
-# Get the QA chain
-rag_chain = get_qa_chain(vector_store_path, openai_api_key)
+# Input for the question
+question = st.text_input("Question: ")
 
-# Invoke the RAG chain with a question and stream the results
-question = "Should I learn powerbi??"
-for chunk in rag_chain.stream(question):
-    print(chunk, end="", flush=True)
+if question:
+    chain = get_qa_chain()
+    response = ""
+    for chunk in chain.stream(question):
+        response += chunk
+    st.header("Answer")
+    st.write(response)
